@@ -30,7 +30,7 @@ data:
           # See AWS_EC2_METADATA_DISABLED in 20-taskmanager.yaml — without it
           # every S3FileSystem construction here pays an EC2-metadata-probe
           # timeout before falling back to these env credentials.
-          root: s3://patchtst-kb/kb-flink?endpoint_override=mimir-minio.patchtst.svc:9000&scheme=http&region=us-east-1
+          root: s3://patchtst-kb/kb-flink?endpoint_override=seaweedfs.patchtst.svc:8333&scheme=http&region=us-east-1
     engine:
       type: beam
       runner: portable
@@ -58,7 +58,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: driver
-          image: patchtst-beam-worker:2.74.0
+          image: patchtst-beam-worker:2.76.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:

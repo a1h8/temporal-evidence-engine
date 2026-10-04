@@ -1,7 +1,7 @@
 # Self-hosted Flink runner for the streaming pipeline (M6).
 #
 # Optional, NOT part of deploy/k3s (which runs engine: local). Apply on top of
-# the base stack (namespace + Mimir/MinIO) with:
+# the base stack (namespace + Mimir) with:
 #   kubectl apply -k deploy/flink
 # Then submit the pipeline with runner: portable — see deploy/flink/README.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -9,6 +9,7 @@ kind: Kustomization
 namespace: patchtst
 resources:
   - 00-flink-conf.yaml
+  - 05-seaweedfs.yaml
   - 10-jobmanager.yaml
   - 20-taskmanager.yaml
   - 30-job-server.yaml
