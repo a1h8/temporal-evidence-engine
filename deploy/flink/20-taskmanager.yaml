@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: taskmanager
-          image: flink:1.18.1-scala_2.12-java11
+          image: flink:1.20.1-scala_2.12-java11
           args: ["taskmanager"]
           ports:
             - { name: rpc, containerPort: 6122 }
@@ -44,9 +44,9 @@ spec:
         # OUR worker image (deploy/dataflow/Dockerfile: Beam SDK + connectors,
         # detection, kb, inference): the stock beam_python3.11_sdk image cannot
         # unpickle the pipeline's DoFns (ModuleNotFoundError: connectors).
-        #   docker build -f deploy/dataflow/Dockerfile -t patchtst-beam-worker:2.74.0 .
+        #   docker build -f deploy/dataflow/Dockerfile -t patchtst-beam-worker:2.76.0 .
         - name: beam-worker-pool
-          image: patchtst-beam-worker:2.74.0
+          image: patchtst-beam-worker:2.76.0
           imagePullPolicy: IfNotPresent
           command: ["/opt/apache/beam/boot"]
           args: ["--worker_pool"]

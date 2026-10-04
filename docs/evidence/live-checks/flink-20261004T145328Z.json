@@ -1,0 +1,9 @@
+{
+  "checked_at": "2026-10-04T14:53:28.402266+00:00",
+  "target": "flink-on-k8s",
+  "flink_job_id": "892e04b84011bc036c107ae15021f681",
+  "flink_job_state": "FINISHED",
+  "flink_job_duration_ms": 23625,
+  "new_signal_files": 130,
+  "pass": true
+}

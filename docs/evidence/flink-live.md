@@ -79,3 +79,27 @@ document answers.
 This session's manual sequence is now `python -m tools.live_check_flink` —
 see `docs/evidence/live-checks/README.md`. Re-run it any time the Flink
 manifests change, rather than re-deriving the steps by hand.
+
+## 2026-10-04 — Flink 1.20 + Beam 2.76.0 + MinIO → seaweedfs
+
+`apache-beam` 2.76.0 dropped the `beam_flink1.18_job_server` image (only
+1.19+ now), forcing a Flink bump too, not just Beam. Separately,
+`quay.io/minio/minio` now 401s for every tag (see
+`docs/evidence/real-telemetry-live.md`), so the S3 checkpoint/KB-sink store
+moved to seaweedfs (`deploy/flink/05-seaweedfs.yaml`) — a filesystem backend
+doesn't work here the way it did for Mimir, since JobManager/TaskManager are
+separate pods needing *shared* durable state and `local-path` is RWO-only.
+
+Two real bugs found getting it green again, both now handled by
+`tools/live_check_flink.py` rather than left as tribal knowledge:
+
+- pyarrow's `S3FileSystem` refuses to auto-create a missing bucket even
+  though seaweedfs' own gateway would — `allow_bucket_creation=True` has to
+  be passed explicitly, client-side.
+- seaweedfs' simple PUT path works with no auth at all, but its multipart
+  path (what Parquet writes actually use) *does* check the access key —
+  needs an explicit `-s3.config` identity (`deploy/flink/05-seaweedfs.yaml`),
+  not just "no auth configured".
+
+Result: `flink_job_state: FINISHED`, 130 Parquet files written —
+`docs/evidence/live-checks/flink-20261004T145328Z.json`.

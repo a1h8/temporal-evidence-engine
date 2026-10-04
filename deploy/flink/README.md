@@ -14,8 +14,8 @@ python -m pipeline (runner: portable)
         │  Beam graph over gRPC
         ▼
   Beam Job Server  ──translates──▶  Flink JobManager
-  (beam_flink1.18_    submits a        │ schedules
-   job_server:2.74.0) native job       ▼
+  (beam_flink1.20_    submits a        │ schedules
+   job_server:2.76.0) native job       ▼
                                    Flink TaskManagers
                                      └─ SDK harness sidecar (Python)  ← runs the detector
                                         via the Fn API (localhost:50000)
@@ -27,25 +27,32 @@ python -m pipeline (runner: portable)
 - **SDK harness sidecar** — each TaskManager pod runs `beam_python3.11_sdk` in
   `--worker_pool` mode so Python DoFns execute in-pod (`environment_type=EXTERNAL`).
 
-Everything is version-locked: Flink **1.18**, Beam **2.74.0**. Bump all three
-tags (Flink images, `beam_flink1.18_job_server`, `beam_python3.11_sdk`) together.
+Everything is version-locked: Flink **1.20**, Beam **2.76.0** (apache-beam
+2.76 dropped the `beam_flink1.18_job_server` image, forcing this bump — see
+`requirements-connectors.txt`'s `apache-beam>=2.70` floor). Bump all three
+tags (Flink images, `beam_flink1.20_job_server`, `beam_python3.11_sdk`) together.
 
 ## Deploy
 
-Requires the base stack (namespace + Mimir/MinIO) already applied (`deploy/k3s`).
+Requires the base stack (namespace + Mimir) already applied (`deploy/k3s`).
 
 ```sh
-# Real MinIO credentials for the checkpoint bucket (overrides the placeholder):
+# seaweedfs (05-seaweedfs.yaml) runs its S3 gateway with no auth -- these
+# values are placeholders Hadoop's S3A client requires non-empty but
+# seaweedfs never checks. Only use real secret values here if you swap the
+# object store for one that actually enforces credentials.
 kubectl -n patchtst create secret generic flink-s3-creds \
-  --from-literal=AWS_ACCESS_KEY_ID=<key> \
-  --from-literal=AWS_SECRET_ACCESS_KEY=<secret> \
+  --from-literal=AWS_ACCESS_KEY_ID=placeholder \
+  --from-literal=AWS_SECRET_ACCESS_KEY=placeholder \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -k deploy/flink
 kubectl -n patchtst rollout status deploy/flink-jobmanager
 ```
 
-Create the `patchtst-flink` bucket in MinIO (checkpoints/savepoints) beforehand.
+The `patchtst-flink` bucket is created on first checkpoint write — seaweedfs'
+S3 gateway auto-creates buckets on upload (`-s3.autoCreateBucket`, on by
+default), unlike MinIO.
 
 ## Submit
 
@@ -65,7 +72,7 @@ kubectl -n patchtst port-forward svc/flink-jobmanager 8081:8081
 
 ## What you get over Dataflow / DirectRunner
 
-- **Exactly-once + durable checkpoints** (RocksDB → S3/MinIO): a crash resumes
+- **Exactly-once + durable checkpoints** (RocksDB → S3/seaweedfs): a crash resumes
   in-flight windows instead of losing them.
 - **Sovereignty**: everything on your cluster, nothing on GCP — consistent with
   the knowledge-base role feeding kube-verdict.

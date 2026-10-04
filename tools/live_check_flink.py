@@ -43,6 +43,49 @@ def _flink_jobs(namespace: str) -> list[dict]:
     return json.loads(out)["jobs"]
 
 
+_MKBUCKETS_SCRIPT = """
+import pyarrow.fs as pafs
+
+fs = pafs.S3FileSystem(
+    access_key="placeholder", secret_key="placeholder",
+    endpoint_override="seaweedfs.patchtst.svc.cluster.local:8333",
+    scheme="http", region="us-east-1", allow_bucket_creation=True,
+)
+for bucket in ("patchtst-flink", "patchtst-kb"):
+    fs.create_dir(bucket, recursive=True)
+print("BUCKETS_OK")
+"""
+
+
+def ensure_buckets(namespace: str) -> None:
+    # A plain unsigned PUT would create these (seaweedfs allows that for
+    # simple requests), but using the same pyarrow.fs.S3FileSystem the real
+    # write path uses is the more honest check -- it needs
+    # allow_bucket_creation=True explicitly either way (the default refuses
+    # auto-create even server-side support exists). patchtst-flink
+    # (checkpoints) and patchtst-kb (the Flink-sourced KB sink) both need to
+    # exist before the first write.
+    pod = "live-check-flink-mkbuckets"
+    _kubectl("delete", "pod", pod, "--ignore-not-found", "--force", "--grace-period=0", namespace=namespace)
+    _kubectl(
+        "run", pod, "--restart=Never", "--image=patchtst-pipeline:dev",
+        "--image-pull-policy=IfNotPresent",
+        "--command", "--", "python", "-c", _MKBUCKETS_SCRIPT,
+        namespace=namespace,
+    )
+    deadline = time.monotonic() + 30
+    phase = ""
+    while time.monotonic() < deadline:
+        phase = _kubectl("get", "pod", pod, "-o", "jsonpath={.status.phase}", namespace=namespace).strip()
+        if phase in ("Succeeded", "Failed"):
+            break
+        time.sleep(2)
+    logs = _kubectl("logs", pod, namespace=namespace)
+    _kubectl("delete", "pod", pod, "--ignore-not-found", "--force", "--grace-period=0", namespace=namespace)
+    if phase != "Succeeded" or "BUCKETS_OK" not in logs:
+        raise RuntimeError(f"bucket setup pod ended in phase={phase!r}, logs:\n{logs}")
+
+
 def seed_data(namespace: str) -> None:
     print("[1/4] seeding fresh sim_* metrics into Mimir...")
     _kubectl("delete", "job", "ingest-seed", "--ignore-not-found", namespace=namespace)
@@ -82,17 +125,46 @@ def wait_for_flink_job(namespace: str, before: set[str], timeout: float) -> dict
     raise TimeoutError(f"Flink job did not finish within {timeout}s (last seen: {latest_seen})")
 
 
-def verify_signal_landed(namespace: str, timeout: float) -> int:
+_LISTFILES_SCRIPT = """
+import pyarrow.fs as pafs
+
+fs = pafs.S3FileSystem(
+    access_key="placeholder", secret_key="placeholder",
+    endpoint_override="seaweedfs.patchtst.svc.cluster.local:8333",
+    scheme="http", region="us-east-1",
+)
+selector = pafs.FileSelector("patchtst-kb/kb-flink", recursive=True)
+files = [f for f in fs.get_file_info(selector) if f.type == pafs.FileType.File]
+print(f"FILE_COUNT={len(files)}")
+"""
+
+
+def verify_signal_landed(namespace: str) -> int:
     print("[4/4] verifying a fresh signal landed in the KB...")
-    minutes = max(1, int(timeout / 60) + 1)
-    out = _kubectl(
-        "exec", "deploy/mimir-minio", "--",
-        "sh", "-c",
-        "mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD "
-        f">/dev/null 2>&1; mc find local/patchtst-kb/kb-flink --newer-than {minutes}m | wc -l",
+    # `kubectl run --rm -i` races a fast-completing pod's own exit (drops
+    # captured output); create + poll for phase + logs + delete instead, the
+    # pattern already proven reliable elsewhere (tools/live_check_alert.py).
+    pod = "live-check-flink-listfiles"
+    _kubectl("delete", "pod", pod, "--ignore-not-found", "--force", "--grace-period=0", namespace=namespace)
+    _kubectl(
+        "run", pod, "--restart=Never", "--image=patchtst-pipeline:dev",
+        "--image-pull-policy=IfNotPresent",
+        "--command", "--", "python", "-c", _LISTFILES_SCRIPT,
         namespace=namespace,
     )
-    return int(out.strip())
+    deadline = time.monotonic() + 30
+    phase = ""
+    while time.monotonic() < deadline:
+        phase = _kubectl("get", "pod", pod, "-o", "jsonpath={.status.phase}", namespace=namespace).strip()
+        if phase in ("Succeeded", "Failed"):
+            break
+        time.sleep(2)
+    out = _kubectl("logs", pod, namespace=namespace)
+    _kubectl("delete", "pod", pod, "--ignore-not-found", "--force", "--grace-period=0", namespace=namespace)
+    for line in out.splitlines():
+        if line.startswith("FILE_COUNT="):
+            return int(line.split("=", 1)[1])
+    raise RuntimeError(f"could not parse file count (phase={phase!r}) from output:\n{out}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -106,10 +178,11 @@ def main(argv: list[str] | None = None) -> int:
 
     started = datetime.now(timezone.utc)
     try:
+        ensure_buckets(args.namespace)
         seed_data(args.namespace)
         before = submit(args.namespace)
         job = wait_for_flink_job(args.namespace, before, args.timeout)
-        n_files = verify_signal_landed(args.namespace, args.timeout)
+        n_files = verify_signal_landed(args.namespace)
     except Exception as exc:
         print(f"FAIL: {exc}", file=sys.stderr)
         return 1

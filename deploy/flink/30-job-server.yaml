@@ -1,8 +1,8 @@
 # Beam Flink Job Server — translates the Beam graph into a native Flink job and
 # submits it to the JobManager. The Python driver (python -m pipeline with
 # runner: portable) talks to this server's job endpoint (:8099); it does NOT
-# talk to Flink directly. Version-locked to the Flink cluster (1.18) and the
-# Beam SDK (2.74.0).
+# talk to Flink directly. Version-locked to the Flink cluster (1.20) and the
+# Beam SDK (2.76.0).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: job-server
-          image: apache/beam_flink1.18_job_server:2.74.0
+          image: apache/beam_flink1.20_job_server:2.76.0
           env:
             # The server advertises --job-host to clients as the artifact and
             # expansion endpoint. With 0.0.0.0 a remote driver connects to
