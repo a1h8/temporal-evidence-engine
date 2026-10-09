@@ -8,8 +8,9 @@ Config shape (dict / YAML / JSON):
     source:   {type: mimir, params: {...}}
     detector: {type: regime-switch,
                forecast:  {type: patchtst},
-               detective: {type: reconstruction}}
-    sinks:    [{type: signal-store, params: {root: ...}}]
+               detective: {type: reconstruction},
+               state:     {type: kb, root: ...}}   # optional, default memory
+    sinks:   [{type: signal-store, params: {root: ...}}]
     engine:   {type: local}        # or beam
 
 The ``patchtst-infer`` / ``reconstruction-infer`` detectors run the load-once M1
@@ -38,6 +39,8 @@ from detection import (
     ZScoreDetector,
     make_detection_transform,
 )
+from detection.regime import InMemoryRegimeState, KBSeededRegimeState
+from kb import SignalStore
 
 _DETECTORS: dict[str, type[Detector]] = {
     "zscore": ZScoreDetector,
@@ -53,10 +56,13 @@ def build_detector(cfg: dict) -> Detector:
     kind = cfg["type"]
     if kind == "regime-switch":
         # params carry the anti-flapping knobs: enter_after / exit_after.
+        kwargs = dict(cfg.get("params", {}))
+        if "state" in cfg:
+            kwargs["state"] = build_regime_state(cfg["state"])
         return RegimeSwitchDetector(
             forecast=build_detector(cfg["forecast"]),
             detective=build_detector(cfg["detective"]),
-            **cfg.get("params", {}),
+            **kwargs,
         )
     try:
         cls = _DETECTORS[kind]
@@ -66,6 +72,24 @@ def build_detector(cfg: dict) -> Detector:
             f"{sorted(_DETECTORS) + ['regime-switch']}"
         ) from None
     return cls(**cfg.get("params", {}))
+
+
+def build_regime_state(cfg: dict) -> InMemoryRegimeState:
+    """Build the regime-switch state store from config.
+
+    ``memory`` (default) starts every key NORMAL — right for a long-lived run,
+    but each batch run (CronJob tick, one-shot Job) would forget an in-flight
+    incident and the detective face would never run. ``kb`` seeds each key from
+    the last persisted signal's regime, so the incident carries across runs:
+
+        state: {type: kb, root: /data/kb}
+    """
+    kind = cfg.get("type", "memory")
+    if kind == "memory":
+        return InMemoryRegimeState()
+    if kind == "kb":
+        return KBSeededRegimeState(SignalStore(cfg["root"]))
+    raise KeyError(f"unknown regime state {kind!r}; available: ['kb', 'memory']")
 
 
 def build_engine(cfg: dict | None) -> Engine:

@@ -1,0 +1,67 @@
+# Longer synthetic series than deploy/k3s/40-ingest.yaml's ingest-seed: the
+# real PatchTST detectors need len(values) >= context_length + prediction_length
+# (64 + 8 = 72 for the forecast face; 64 for reconstruction) or they silently
+# fall back to z-score (detection/patchtst.py, detection/reconstruction.py).
+# 200 points clears both with room for several training windows.
+#
+# 15s apart, not 60s: Mimir rejects samples older than its 1h out-of-order
+# window once the tenant's head has advanced to "now" (which it always has —
+# real cluster telemetry streams in continuously, see deploy/k3s). 200 x 60s
+# spans 3h20 and was mostly rejected (err-mimir-sample-timestamp-too-old);
+# 200 x 15s spans 50min and fits. PatchTST only sees a sequence of values, so
+# the time scale doesn't matter to the model.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest-seed-long
+  namespace: patchtst
+spec:
+  # No retries: --end-at-now re-stamps the series on every attempt, so a retry
+  # after a partially-ingested push would interleave two copies of it.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: ingest
+          image: patchtst-pipeline:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              python - <<'PY'
+              import csv, random
+              # 200 points, 15s apart; cpu baseline ~0.2 with a spike to ~0.95
+              # over the last 8 points (192-199), mem a slow ramp. The spike sits
+              # exactly in the forecast face's scored tail (prediction_length=8),
+              # so the first pipeline run enters INCIDENT. node4/demo keeps this
+              # distinguishable from ingest-seed's node1/demo (zscore) and the
+              # Kafka demo's node2/demo.
+              random.seed(11)
+              with open("/tmp/sim.csv", "w", newline="") as f:
+                  w = csv.writer(f)
+                  w.writerow(["ts", "cpu", "mem"])
+                  for i in range(200):
+                      ts = i * 15
+                      cpu = 0.2 + random.gauss(0, 0.02)
+                      if i >= 192:                # injected anomaly
+                          cpu = 0.95 + random.gauss(0, 0.01)
+                      mem = 0.4 + 0.001 * i + random.gauss(0, 0.01)
+                      w.writerow([ts, round(cpu, 4), round(mem, 4)])
+              PY
+              exec python -m connectors.ingest \
+                --csv /tmp/sim.csv \
+                --endpoint http://mimir-gateway.patchtst.svc.cluster.local:80 \
+                --instance node4 \
+                --metric-prefix sim_ \
+                --label namespace=demo \
+                --label pod=node4 \
+                --end-at-now
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi

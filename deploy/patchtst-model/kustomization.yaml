@@ -1,0 +1,11 @@
+# Apply with:  kubectl apply -k deploy/patchtst-model
+#
+# Requires the base stack (namespace, Mimir, KB datalake PVC) already applied
+# via `kubectl apply -k deploy/k3s`. On-demand overlay, same pattern as
+# deploy/flink and deploy/kafka — validates the actual PatchTST model (D1),
+# not just the zscore fallback the base CronJob runs.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - 00-ingest-seed-long.yaml
+  - 10-pipeline-patchtst.yaml
