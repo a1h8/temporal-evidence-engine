@@ -67,6 +67,45 @@ def test_build_detector_regime_switch_forwards_anti_flapping_params():
     assert d.enter_after == 3 and d.exit_after == 2
 
 
+def test_build_detector_regime_switch_defaults_to_in_memory_state():
+    from detection.regime import InMemoryRegimeState, KBSeededRegimeState
+
+    d = build_detector({
+        "type": "regime-switch",
+        "forecast": {"type": "zscore"},
+        "detective": {"type": "zscore"},
+    })
+    assert type(d.state) is InMemoryRegimeState
+    assert not isinstance(d.state, KBSeededRegimeState)
+
+
+def test_build_detector_regime_switch_kb_state_resumes_incident_across_runs(tmp_path):
+    from kb.signal import SignalRecord
+
+    root = str(tmp_path / "kb")
+    SignalStore(root).write([SignalRecord("pod-a", "cpu", 1, "critical", score=4.0,
+                                          method="patchtst", labels={"regime": "incident"})])
+    cfg = {
+        "type": "regime-switch",
+        "forecast": {"type": "zscore", "params": {"min_points": 5}},
+        "detective": {"type": "zscore", "params": {"min_points": 5}},
+        "state": {"type": "kb", "root": root},
+    }
+    # a fresh build = a fresh batch run: the regime comes from the KB, not NORMAL
+    sig = build_detector(cfg).detect("pod-a", "cpu", STABLE_THEN_SPIKE, ts=2, labels=None)
+    assert sig.labels["mode"] == "detective"
+
+
+def test_build_detector_regime_switch_unknown_state_raises():
+    with pytest.raises(KeyError, match="unknown regime state"):
+        build_detector({
+            "type": "regime-switch",
+            "forecast": {"type": "zscore"},
+            "detective": {"type": "zscore"},
+            "state": {"type": "nope"},
+        })
+
+
 def test_build_detector_unknown_raises():
     with pytest.raises(KeyError, match="unknown detector"):
         build_detector({"type": "nope"})
