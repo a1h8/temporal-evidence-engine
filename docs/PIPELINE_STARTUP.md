@@ -61,3 +61,33 @@ attempt timed out, its second waited for the gateway and completed.
 Open point: with `backoffLimit: 1` a Job makes two attempts, so a read path down
 for good holds the Job for ~490 s, and with `concurrencyPolicy: Forbid` the next
 tick is skipped. The "under the schedule" bound holds per attempt, not per Job.
+
+## Amendment 2 (2026-11-11): the whole Job bounded
+
+Decision on the open point: the Job gets `activeDeadlineSeconds: 280`, which
+bounds every attempt together, so it always ends before the next tick and
+`Forbid` never skips one. The init wait stays at 240 s: a gateway back within the
+first attempt still lets the run complete.
+
+Checks, written before the run:
+
+4. Positive again: with Mimir up, the run completes as in check 1.
+5. Deadline: with `mimir-gateway` at 0, the Job ends `Failed` with reason
+   `DeadlineExceeded` at about 280 s after its start, and the next scheduled tick
+   starts on time (not skipped).
+
+Results (2026-11-11, on the real scheduled ticks):
+
+| Check | Outcome |
+|---|---|
+| 4. Positive | run `Complete`, `activeDeadlineSeconds: 280` on the Job |
+| 5. Deadline, gateway at 0 | tick `16:25:00Z` ended `Failed`, `DeadlineExceeded`, at `16:30:11Z`: **311 s, not ~280 s** |
+| 5. Next tick | tick `16:30` **started at 16:30:11Z**: not skipped, but 11 s late, held by `Forbid` until the previous Job ended; with the gateway back it completed |
+
+The prediction "about 280 s, next tick on time" is half wrong: the deadline is
+enforced about 30 s late, so a 280 s bound still overlaps the next tick by a few
+seconds. No tick was skipped.
+
+Decision (2026-11-11): 280 s kept. The goal was no skipped tick, and it holds; a
+start a few seconds late during an outage is accepted. A lower bound (240 s job,
+200 s wait) was considered and not taken.

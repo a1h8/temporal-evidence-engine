@@ -51,6 +51,9 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
+      # Bounds the whole Job, retries included, under the 5-min schedule, so a
+      # lasting Mimir outage never makes Forbid skip the next tick.
+      activeDeadlineSeconds: 280
       template:
         spec:
           restartPolicy: Never
