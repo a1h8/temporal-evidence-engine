@@ -54,6 +54,42 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          # Waits until Mimir's read path answers before the run reads
+          # (docs/PIPELINE_STARTUP.md): after a reboot the first tick otherwise
+          # fails with "Connection refused". At most 240 s, under the schedule.
+          initContainers:
+            - name: wait-for-mimir
+              image: patchtst-pipeline:dev
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-c"]
+              args:
+                - |
+                  import json, sys, time, urllib.request, yaml
+                  ep = yaml.safe_load(open("/config/pipeline.yaml"))["source"]["params"]["endpoint"]
+                  url = ep.rstrip("/") + "/prometheus/api/v1/query?query=vector(1)"
+                  deadline = time.monotonic() + 240
+                  last = "no success status"
+                  while True:
+                      try:
+                          with urllib.request.urlopen(url, timeout=5) as r:
+                              if json.loads(r.read()).get("status") == "success":
+                                  print("mimir ready:", ep)
+                                  sys.exit(0)
+                      except Exception as e:
+                          last = e
+                      if time.monotonic() > deadline:
+                          sys.exit(f"mimir not ready after 240 s at {ep}: {last}")
+                      time.sleep(5)
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
           containers:
             - name: pipeline
               image: patchtst-pipeline:dev
